@@ -34,6 +34,7 @@
 
 #include <iostream>
 #include <memory>
+#include <cmath>
 
 #include <vtkSmartPointer.h>
 #include <vtkDirectory.h>
@@ -69,7 +70,9 @@ vtkPolyData* loadVTKPolyData(const std::string& filename)
 
 
 //
-// Build a new shape model from vtkPolyData, given in datadir.
+// Change the datadir meshes correspondences according to the reference mesh.
+// It assumed that the meshes are roughly aligned.
+//
 //
 int main(int argc, char** argv) {
 
@@ -81,36 +84,53 @@ int main(int argc, char** argv) {
 	std::string referenceName(argv[2]);
 
 
+
 	typedef std::vector<std::string> StringVectorType;
 	StringVectorType filenames;
-  getdir(datadir, filenames, ".stl");
-  if (filenames.size() == 0) {
-    	std::cerr << "did not find any stl files in directory " << datadir << " exiting.";
-    	exit(-1);
-  }
+    getdir(datadir, filenames, ".stl");
+    if (filenames.size() == 0) {
+        std::cerr << "did not find any stl files in directory " << datadir << " exiting.";
+        return -1;
+    }
 	
 	try {
 
 	
-		vtkPolyData* reference = loadVTKPolyData(datadir + "/" + referenceName);
+        vtkSmartPointer<vtkPolyData> reference = loadVTKPolyData(datadir + "/" + referenceName);
 
 		reference->ComputeBounds();
 		double bounds[6];
 		reference->GetBounds(bounds);
+
+
+        // compute the maximum bound length to calculate the scaling factor
+        double maxLength = 0;
+        int maxBound = 0;
+        for (int i = 0; i < 3; ++i) {
+            double length = fabs(bounds[i*2] - bounds[i*2 + 1]);
+            if (length > maxLength) {
+                maxLength = length;
+                maxBound = i;
+            }
+        }
+
 		
-		
-		// Now we add our data to the data manager
-		// load the data and add it to the data manager. We take the first 17 hand shapes that we find in the data folder
-		for (unsigned i = 0; i < filenames.size() ; i++) {
-			vtkPolyData* dataset = loadVTKPolyData(datadir + "/" + filenames[i]);
+        // rescale each mesh of the datadir (except the reference mesh) to the reference mesh scale
+        for (int i = 0; i < filenames.size(); ++i) {
+
+            if (filenames[i] == referenceName)
+                continue;
+
+            vtkSmartPointer<vtkPolyData> sample = loadVTKPolyData(datadir + "/" + filenames[i]);
 			std::cout << datadir + "/" + filenames[i] << std::endl;
 
-			// We provde the filename as a second argument.
-			// It will be written as metadata, and allows us to more easily figure out what we did later.
-			dataManager->AddDataset(dataset, filenames[i]);
+            sample->ComputeBounds();
+            double sampleBounds[6];
+            sample->GetBounds(sampleBounds);
 
-			// it is save to delete the dataset after it was added, as the datamanager direclty copies it.
-			dataset->Delete();
+            double sampleLength = fabs(sampleBounds[i*2] - sampleBounds[i*2 + 1]);
+            double scale = maxLength/sampleLength;
+
 		}
 
 		// To actually build a model, we need to create a model builder object.
