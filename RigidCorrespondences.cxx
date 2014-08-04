@@ -39,6 +39,11 @@
 #include <vtkSmartPointer.h>
 #include <vtkDirectory.h>
 #include <vtkSTLReader.h>
+#include <vtkSTLWriter.h>
+#include <vtkTransformPolyDataFilter.h>
+#include <vtkPolyData.h>
+#include <vtkTransform.h>
+
 
 using std::auto_ptr;
 
@@ -53,7 +58,6 @@ int getdir (std::string dir, std::vector<std::string> &files, const std::string&
 		if (extension == ".*" || std::string(filename).find(extension) != std::string::npos)
             files.push_back(filename);
 	}
-	directory->Delete();
     return 0;
 }
 
@@ -83,8 +87,6 @@ int main(int argc, char** argv) {
 	std::string datadir(argv[1]);
 	std::string referenceName(argv[2]);
 
-
-
 	typedef std::vector<std::string> StringVectorType;
 	StringVectorType filenames;
     getdir(datadir, filenames, ".stl");
@@ -94,7 +96,6 @@ int main(int argc, char** argv) {
     }
 	
 	try {
-
 	
         vtkSmartPointer<vtkPolyData> reference = loadVTKPolyData(datadir + "/" + referenceName);
 
@@ -104,16 +105,15 @@ int main(int argc, char** argv) {
 
 
         // compute the maximum bound length to calculate the scaling factor
-        double maxLength = 0;
-        int maxBound = 0;
+        double referenceMaxLength = 0;
+        int referenceMaxBound = 0;
         for (int i = 0; i < 3; ++i) {
             double length = fabs(bounds[i*2] - bounds[i*2 + 1]);
-            if (length > maxLength) {
-                maxLength = length;
-                maxBound = i;
+            if (length > referenceMaxLength) {
+                referenceMaxLength = length;
+                referenceMaxBound = i;
             }
         }
-
 		
         // rescale each mesh of the datadir (except the reference mesh) to the reference mesh scale
         for (int i = 0; i < filenames.size(); ++i) {
@@ -128,26 +128,50 @@ int main(int argc, char** argv) {
             double sampleBounds[6];
             sample->GetBounds(sampleBounds);
 
-            double sampleLength = fabs(sampleBounds[i*2] - sampleBounds[i*2 + 1]);
-            double scale = maxLength/sampleLength;
+            // Here we use the assumption that all the samples are roughly aligned!
+            double sampleLength = fabs(sampleBounds[referenceMaxBound*2] - sampleBounds[referenceMaxBound*2 + 1]);
+            double scale = referenceMaxLength/sampleLength;
 
+            std::cout << "Scale " << scale << std::endl;
+
+            double referenceCenter[3], center[3];
+            reference->GetCenter(referenceCenter);
+
+            vtkSmartPointer<vtkTransform> scaleTransform = vtkSmartPointer<vtkTransform>::New();
+            scaleTransform->Scale(scale, scale, scale);
+
+            std::cout << referenceCenter[0] << ";" << referenceCenter[1] << ";" << referenceCenter[2] << std::endl;
+
+
+            vtkSmartPointer<vtkTransformPolyDataFilter> transformFilter = vtkSmartPointer<vtkTransformPolyDataFilter>::New();
+            transformFilter->SetInput(sample);
+            transformFilter->SetTransform(scaleTransform);
+            transformFilter->Update();
+
+            transformFilter->GetOutput()->GetCenter(center);
+            vtkSmartPointer<vtkTransform> translationTransform = vtkSmartPointer<vtkTransform>::New();
+            translationTransform->Translate(referenceCenter[0] - center[0], referenceCenter[1] - center[1], referenceCenter[2] - center[2]);
+
+            std::cout << center[0] << ";" << center[1] << ";" << center[2] << std::endl;
+
+            vtkSmartPointer<vtkTransformPolyDataFilter> transformFilter2 = vtkSmartPointer<vtkTransformPolyDataFilter>::New();
+            transformFilter2->SetInput(transformFilter->GetOutput());
+            transformFilter2->SetTransform(translationTransform);
+            transformFilter2->Update();
+
+            size_t pos = filenames[i].find_last_of(".");
+            filenames[i].insert(pos, "s");
+
+            vtkSmartPointer<vtkSTLWriter> writer = vtkSmartPointer<vtkSTLWriter>::New();
+            writer->SetInput(transformFilter2->GetOutput());
+            writer->SetFileTypeToBinary();
+            writer->SetFileName((datadir + "/" + filenames[i]).c_str());
+            writer->Update();
 		}
 
-		// To actually build a model, we need to create a model builder object.
-		// Calling the build model with a list of samples from the data manager, returns a new model.
-		// The second parameter to BuildNewModel is the variance of the noise on our data
-		auto_ptr<ModelBuilderType> modelBuilder(ModelBuilderType::Create());
-
-		auto_ptr<StatisticalModelType> model(modelBuilder->BuildNewModel(dataManager->GetData(), 0.01));
-
-		// Once we have built the model, we can save it to disk.
-		model->Save(modelname);
-		std::cout << "Successfully saved shape model as " << modelname << std::endl;
-
-		reference->Delete();
 	}
-	catch (StatisticalModelException& e) {
-		std::cout << "Exception occured while building the shape model" << std::endl;
+    catch (std::exception& e) {
+        std::cout << "Exception occured while calculating correspondences" << std::endl;
 		std::cout << e.what() << std::endl;
 	}
 }
